@@ -14,7 +14,6 @@
 FIPS 202 requires that XOFs satisfy the following two properties:
 
 1. (One-way) It is computationally infeasible to find any input that maps to any new pre-specified output.
-
 2. (Collision-resistant) It is computationally infeasible to find any two distinct inputs that map to the same output.
 
 In Signal protocol, ShoHmacSha256 is a concrete implementation of ShoApi. ShoHmacSha256 uses HMAC-SHA-256 and a small set of creative techniques to create a secure XOF.
@@ -30,40 +29,41 @@ The output of HMAC-SHA-256 is a 256-bit value - a block of 32 bytes. A XOF, on t
 We present a slightly formatted version of ShoApi below. We have added informal comments stating the general behavior of each function.
 
 ```rust
-pub trait ShoApi {
-    // Create a SHO instance with 'label' domain-separator (customization label).
-    // set hasher's initial state.
-    fn new(label: &[u8]) -> Self
-    where
-        Self: Sized;
-
-    // Absorb 'input' incrementally; ingest streaming input.
-    fn absorb(&mut self, input: &[u8]);
-
-    // Make the current state of this SHO a one-way hash function of preceding inputs.
-    // SHO may hash preceding (absorbed) inputs, and update the internal state
-    // with the extracted pseudorandom value.
-    // Reset hasher to its initial state.
-    fn ratchet(&mut self);
-
-    // absorb() and ratchet() in one logical step.
-    fn absorb_and_ratchet(&mut self, input: &[u8]) {
-        self.absorb(input);
-        self.ratchet();
-    }
-
-    // Return a byte sequence of length 'outlen'.
-    // In general, the output is a hash of the domain separator and absorbed inputs.
-    fn squeeze_and_ratchet(&mut self, outlen: usize) -> Vec<u8>;
-
-    // unimplemented; make this more generic later
-    // pub fn squeeze(&mut self, _outlen: usize) -> Vec<u8>;
-}
+ 1 pub trait ShoApi {
+ 2   // Create a SHO instance with 'label' domain-separator (customization label).
+ 3   // set hasher's initial state.
+ 4   fn new(label: &[u8]) -> Self
+ 5   where
+ 6       Self: Sized;
+ 7
+ 8   // Absorb 'input' incrementally; ingest streaming input.
+ 9   fn absorb(&mut self, input: &[u8]);
+10
+11    // Make the current state of this SHO a one-way hash function of preceding inputs.
+12    // SHO may hash preceding (absorbed) inputs, and update the internal state
+13    // with the extracted pseudorandom value.
+14    // Reset hasher to its initial state.
+15    fn ratchet(&mut self);
+16
+17    // absorb() and ratchet() in one logical step.
+18    fn absorb_and_ratchet(&mut self, input: &[u8]) {
+19        self.absorb(input);
+20        self.ratchet();
+21    }
+22
+23    // Return a byte sequence of length 'outlen'.
+24    // In general, the output is a hash of the domain separator and absorbed inputs.
+25    fn squeeze_and_ratchet(&mut self, outlen: usize) -> Vec<u8>;
+26
+27    // unimplemented; make this more generic later
+28    // pub fn squeeze(&mut self, _outlen: usize) -> Vec<u8>;
+29 }
 ```
 
-It is clear from its definition that `ShoApi` is designed to maintain mutable state.
+It is clear from its definition that *ShoApi* is designed to maintain mutable state.
 
-This trait provides a generic implementation for `absorb_and_ratchet()` in terms of the abstract functions `absorb()` and `ratchet()`.
+<a id="xref-sho-trait-absorb-and-ratchet"></a>
+This trait provides a generic implementation for *absorb_and_ratchet(input)* in terms of the abstract functions *absorb(input)* followed by *ratchet()*.
 
 
 ## ShoHmacSha256
@@ -73,93 +73,208 @@ This trait provides a generic implementation for `absorb_and_ratchet()` in terms
 Let's take a first look at the types:
 
 ```rust
-pub struct ShoHmacSha256 {
-    hasher: Hmac<Sha256>,
-    cv: [u8; HASH_LEN],
-    mode: Mode,
-}
+ 1 pub struct ShoHmacSha256 {
+ 2     hasher: Hmac<Sha256>,
+ 3     cv: [u8; HASH_LEN],
+ 4     mode: Mode,
+ 5 }
 
-enum Mode {
-    ABSORBING,
-    RATCHETED,
-}
+ 1 enum Mode {
+ 2     ABSORBING,
+ 3     RATCHETED,
+ 4 }
 ```
 
-The SHO implementation is based on HMAC-SHA-256 hashing function. It is useful to recall that HMAC-SHA-256 is a pseudorandom function. The SHO instance operates in two modes: ABSORBING and RATCHETED. While ABSORBING, **hasher** simply ingests its inputs. When SHO is ratcheted, the **chaining variable** **cv** captures the MAC output of the hasher.
+The SHO implementation is based on HMAC-SHA-256 hashing function. It is useful to recall that HMAC-SHA-256 is a pseudorandom function. The SHO instance operates in two modes: ABSORBING and RATCHETED. While ABSORBING, **hasher** simply ingests its inputs. When SHO is ratcheted, the **chaining variable** **cv** captures the MAC output of the hasher. We will learn more about ratcheting in the later sections.
+
+## SHO use cases in *libsignal*
 
 Let's go further and see how a SHO is instantiated and used. We will draw a few tiny snippets from within **libsignal** just to set the context.
 
 Our first example snippet is from [poksho](<https://github.com/signalapp/libsignal/blob/main/rust/poksho/src/statement.rs#L188-L195>):
 
 ```rust
-    let mut sho = ShoHmacSha256::new(b"POKSHO_Ristretto_SHOHMACSHA256");
-    sho.absorb(&self.to_bytes());
-    for point in &all_points {
-        sho.absorb(&point.compress().to_bytes());
-    }
-    sho.ratchet();
+ 1 let mut sho = ShoHmacSha256::new(b"POKSHO_Ristretto_SHOHMACSHA256");
+ 2 sho.absorb(&self.to_bytes());
+ 3 for point in &all_points {
+ 4     sho.absorb(&point.compress().to_bytes());
+ 5 }
+ 6 sho.ratchet();
 ```
+
+A `point` in the above snippet is a 256-bit value.
 
 The second example is from [zkcredential](<https://github.com/signalapp/libsignal/blob/main/rust/zkcredential/src/credentials.rs#L46-L48>):
 
 ```rust
-    let mut sho =
-            ShoHmacSha256::new(b"Signal_ZKCredential_CredentialPrivateKey_generate_20230410");
-    sho.absorb_and_ratchet(&randomness);
+ 1 let mut sho =
+ 2     ShoHmacSha256::new(b"Signal_ZKCredential_CredentialPrivateKey_generate_20230410");
+ 3 sho.absorb_and_ratchet(&randomness);
 ```
+
+The argument `randomness` in this snippet is an array of 32 bytes (a 256-bit value, as in example 1).
+
 
 And the last one from [backup auth credential](<https://github.com/signalapp/libsignal/blob/main/rust/zkgroup/src/api/backups/auth_credential.rs#L140-L142>):
 
 ```rust
-    let mut sho = poksho::ShoHmacSha256::new(b"20231003_Signal_BackupAuthCredentialRequest");
-    sho.absorb_and_ratchet(uuid::Uuid::from(aci).as_bytes());
-    sho.absorb_and_ratchet(&backup_key.0);
-
+ 1 let mut sho = poksho::ShoHmacSha256::new(b"20231003_Signal_BackupAuthCredentialRequest");
+ 2 sho.absorb_and_ratchet(uuid::Uuid::from(aci).as_bytes());
+ 3 sho.absorb_and_ratchet(&backup_key.0);
 ```
 
 These three examples clearly demonstrate that domain separation is an important parameter while creating a ShoHmacSha256 instance. The second and third examples show the importance of not using common prefixes in domain separators. While the domain separator in the second example uses "Signal" as prefix, the in the third it is "20231003".
 
-There is one more difference. The first example absorbs multiple inputs before ratcheting, while the second example absorbs and ratchets in one logical step. The third example shows 'absorb_and_ratchet()' being invoked in succession. We shall recall these flavors when reviewing the implementation details.
+There is one more difference. The first example absorbs multiple inputs before ratcheting, while the second example absorbs and ratchets in one logical step. The third example shows 'absorb_and_ratchet()' used in succession. We shall recall these flavors when reviewing the implementation details.
 
+## ShoHmacSha256 - Part 1
 
 Let's get a little closer to the [definitions](<https://github.com/signalapp/libsignal/blob/main/rust/poksho/src/shosha256.rs#L31-L62>) of three functions we have seen so far:
 
 ```rust
-impl ShoApi for ShoHmacSha256 {
-    fn new(label: &[u8]) -> ShoHmacSha256 {
-        let mut sho = ShoHmacSha256 {
-            hasher: Hmac::<Sha256>::new_from_slice(&[0; HASH_LEN])
-                .expect("HMAC accepts 256-bit keys"),
-            cv: [0; HASH_LEN],
-            mode: Mode::RATCHETED,
-        };
-        sho.absorb_and_ratchet(label);
-        sho
-    }
-
-    fn absorb(&mut self, input: &[u8]) {
-        if let Mode::RATCHETED = self.mode {
-            self.hasher =
-                Hmac::<Sha256>::new_from_slice(&self.cv).expect("HMAC accepts 256-bit keys");
-            self.mode = Mode::ABSORBING;
-        }
-        self.hasher.update(input);
-    }
-
-    // called after absorb() only; streaming squeeze not yet supported
-    fn ratchet(&mut self) {
-        if let Mode::RATCHETED = self.mode {
-            return;
-        }
-        self.hasher.update(&[0x00]);
-        self.cv
-            .copy_from_slice(&self.hasher.clone().finalize().into_bytes());
-        self.hasher.reset();
-        self.mode = Mode::RATCHETED;
-    }
-}
+ 1 impl ShoApi for ShoHmacSha256 {
+ 2    fn new(label: &[u8]) -> ShoHmacSha256 {
+ 3        let mut sho = ShoHmacSha256 {
+ 4            hasher: Hmac::<Sha256>::new_from_slice(&[0; HASH_LEN])
+ 5                .expect("HMAC accepts 256-bit keys"),
+ 6            cv: [0; HASH_LEN],
+ 7            mode: Mode::RATCHETED,
+ 8        };
+ 9        sho.absorb_and_ratchet(label);
+10        sho
+11    }
+12
+13    fn absorb(&mut self, input: &[u8]) {
+14        if let Mode::RATCHETED = self.mode {
+15            self.hasher =
+16                Hmac::<Sha256>::new_from_slice(&self.cv).expect("HMAC accepts 256-bit keys");
+17            self.mode = Mode::ABSORBING;
+18        }
+19        self.hasher.update(input);
+20    }
+21
+22    // called after absorb() only; streaming squeeze not yet supported
+23    fn ratchet(&mut self) {
+24        if let Mode::RATCHETED = self.mode {
+25            return;
+26        }
+27        self.hasher.update(&[0x00]);
+28        self.cv
+29            .copy_from_slice(&self.hasher.clone().finalize().into_bytes());
+30        self.hasher.reset();
+31        self.mode = Mode::RATCHETED;
+32    }
+33 }
 
 ```
+
+### Creation Semantics of ShoHmacSha256
+The first thing to notice in function *new(label)* is that the *key* value passed to HMAC-SHA-256 is a block of zeroes. The domain separator *label* is not used in initializing the *hasher*. In my first reading of the code, this came as a surprise because I was expecting the customization label to be used as a seed for HMAC. However, after reading [answer 1](https://moderncrypto.org/mail-archive/noise/2018/001892.html) and [answer 2](https://moderncrypto.org/mail-archive/noise/2018/001894.html) I began to see the thought process behind this construction.
+
+In TLS 1.3, HMAC is keyed with a string of zeroes during the key derivation process (aka key schedule). While deriving the `Early Secret` for `client_early_traffic_secret` or `binder_key` in [RFC 8446](https://datatracker.ietf.org/doc/html/rfc8446#section-7.1)(section 7.1, page 93), the HKDF-Extract step explicitly receives a block of zeroes for its salt. This value, in turn, is passed as HMAC's initial key material within [KHDF-Extract](https://datatracker.ietf.org/doc/html/rfc5869#section-2.2).
+
+
+The SHO instance (named *sho*) starts off in the RATCHETED mode setting *cv* to a block of zeroes. It is important to keep in mind that the size of *cv* equals the length of SHA-256 block (which is 32 bytes).
+
+Immediately after crafting *sho*, construction proceeds t0 *absorb_and_ratchet* with *label* (the domain separator value). As we have already [seen](#xref-sho-trait-absorb-and-ratchet) in a previous section, this essentially absorbs the customization label and ratchets. Our immediate interest, therefore, is to understand what actually happens in these two functions.
+
+
+#### Completing ShoHmacSha256 Construction with absorb_and_ratchet
+A closer inspection of the call chain `new(label) --> absorb_and_ratchet(label)` reveals that the three functions can be readily inlined with simple renaming of function parameters. The result of such a source transformation is this inlined function:
+
+```rust
+ 1 fn _rewrite_inline_ShoHmacSha256_new_absorb_and_ratchet_(label: &[u8]) {
+ 2    // new
+ 3    let mut sho = ShoHmacSha256 {
+ 4        hasher: Hmac::<Sha256>::new_from_slice(&[0; HASH_LEN])
+ 5            .expect("HMAC accepts 256-bit keys"),
+ 6        cv: [0; HASH_LEN],
+ 7        mode: Mode::RATCHETED,
+ 8    };
+ 9
+10    // sho.absorb_and_ratchet(label);
+11    {
+12        // absorb(label)
+13        // rename identifiers: "self" as "sho", and "input" as "label".
+14        if let Mode::RATCHETED = sho.mode {
+15            sho.hasher =
+16                Hmac::<Sha256>::new_from_slice(&sho.cv).expect("HMAC accepts 256-bit keys");
+17            sho.mode = Mode::ABSORBING;
+18        }
+19        sho.hasher.update(label);
+20
+21        // ratchet()
+22        // rename identifiers: "self" as "sho".
+23        if let Mode::RATCHETED = sho.mode {
+24             return sho; // code rewrite: return "sho"
+25        }
+26        sho.hasher.update(&[0x00]);
+27        sho.cv
+28            .copy_from_slice(&self.hasher.clone().finalize().into_bytes());
+29        sho.hasher.reset();
+30        sho.mode = Mode::RATCHETED;
+31    }
+32
+33    sho
+34 }
+```
+
+Note that *absorb_and_ratchet()* executes *absorb* when *sho* mode is RATCHETED.
+
+The effect of *absorb(label)* on *sho* is the following:
+
+1. *hasher* is replaced by a fresh HMAC-SHA-256 instance primed with the value *cv*.
+    - at this point in execution, *cv* is simply a byte array of 32 zeroes.
+2. the new *hasher* absorbs the domain separator *label*.
+3. *mode* becomes ABSORBING.
+
+In other words, when creating a new instance of SHO
+
+1. *hasher*'s key is a 256 bit block of zeroes
+    - it matches the block size of SHA-256.
+    - this initializes *hasher* with a well-defined (predictable) state
+2. the domain separator is absorbed.
+    - the customization label becomes a prefix to context-related inputs absorbed later.
+3. *sho* is prepared to absorb more inputs
+
+
+Following *absorb*, in lines 26-28 actually carry out the crux of *ratchet()*
+
+1. *hasher*'s input is zero-padded
+2. *hasher* is finalized, and the pseudorandom output is extracted
+    - recall that HMAC-SHA-256 is a PRF
+3. *cv* is initialized with the fresh pseudorandom output from *hasher*
+
+Now that *sho* has ratcheted and collected a one-way hash of the current state of *sho*, it reduces *hasher*'s state to a minimum in lines 29-30.
+
+1. *hasher*'s internal state is reset
+    - *hasher*'s key is reset to what it was prior to *finalize()* on line 28.
+    - *hasher*s inputs are cleared.
+2. *sho* enters RATCHETED mode
+    - *cv* represents a one-way hash of the past inputs
+    - *hasher* state is reset.
+    - *hasher* is ready to accept fresh inputs.
+
+We can now summarize the state of *sho* like so:
+
+```rust
+ 1    let hs256 = Hmac::<Sha256>::new_from_slice(&[0; HASH_LEN])
+ 2        .expect("HMAC accepts 256-bit keys");
+ 3    hs256.update(label);
+ 4    hs256.update(0x00);
+ 5
+ 6    let prv = hs256.finalize().into_bytes();
+ 7
+ 8    let sho = {
+ 9        hasher: Hmac::<Sha256>::new_from_slice(&[0; HASH_LEN])
+10            .expect("HMAC accepts 256-bit keys"),
+11        cv: hs256.finalize().into_bytes(),
+12        mode: Mode::RATCHETED,
+13    };
+```
+
+
+
 
 SHO instances operate in one of the two states: ABSORBING and RATCHETED. While ABSORBING, `hasher` is updated with new input of arbitrary length. This is the "streaming" feature of SHO allowing it to absorb inputs at different stages of protocol execution. The current implementation does not impose any logical limit on the total length of inputs supplied to `hasher`. In Signal's use cases, ABSORBING ingests not more than a few hundred bytes.
 
