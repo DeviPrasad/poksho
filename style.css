@@ -51,11 +51,32 @@
         margin-left: 10%;
         margin-right: 10%;
         padding: 0;
-        font-size: 1.2em;
-        line-height: 1.2;
-        overflow-x: hidden;
-        overflow-x: clip !important;
     }
+}
+
+html,
+body {
+    padding: 0;
+    font-family: Georgia, Arial, Helvetica, sans-serif;
+    font-size: 1.18rem;
+    font-style: normal;
+    font-variant: normal;
+    line-height: 1.15;
+    overflow-x: hidden;
+    overflow-x: clip !important;
+}
+
+title {
+    font-size: large;
+    font-weight: bold;
+}
+
+h1 {
+    font-size: 1.7em;
+}
+
+#the-design-and-implementation-of-shohmacsha256 {
+    display: none;
 }
 
 ol {
@@ -67,7 +88,7 @@ ol {
 }
 
 li {
-    margin: 0.3em 0 0.3em 0;
+    margin: 4px 0 1px 0;
 }
 
 img {
@@ -85,7 +106,7 @@ td {
 }
 
 code.sourceCode {
-    font-size: 1.05em;
+    font-size: 0.9rem;
     line-height: 1.2;
 }
 
