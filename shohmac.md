@@ -9,7 +9,7 @@
 
 # The Design and Implementation of ShoHmacSha256
 
-**ShoHmacSha256** is a Stateful Hash Object (SHO) that absorbs inputs incrementally, and produces arbitrary-length output when squeezed. Signal protocol defines a simple API for SHO, called ShoApi. This API is designed to mimic the behavior of an *extendable-output function* (XOF). [FIPS 202](#xref-nist-fips-202-xof) defines XOF as *a function on bit strings (also called messages) in which the output can be extended to any desired length*.
+**ShoHmacSha256** is a Stateful Hash Object (SHO) that absorbs inputs incrementally, and produces arbitrary-length output when squeezed. Signal protocol defines a simple API for SHO, called ShoApi. This API is designed to mimic the behavior of an *extendable-output function* (XOF). [FIPS 202](<https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.202.pdf>) defines XOF as *a function on bit strings (also called messages) in which the output can be extended to any desired length*.
 
 FIPS 202 requires XOFs to satisfy the two properties (*emphasis ours*):
 
@@ -65,7 +65,7 @@ This trait provides a default, generic implementation for *absorb_and_ratchet(in
 
 ## ShoHmacSha256  {#xref-shohamcsha256-struct}
 
-[ShoHmacSha256](<https://github.com/signalapp/libsignal/blob/main/rust/poksho/src/shohmacsha256.rs#L24-L28>) provides a concrete implementation of ShoApi. It is so named because it is based on HMAC-SHA-256. In this section we will focus on type definitions and a way of reasoning about ShoHmacSha256. I personally learnt a great deal referring to the conversations in two related threads: [Stateful Hash Object Proposal](#xref-trevor-sho-proposal) and [Symmetric Crypto overhaul and stateful hashing](#xref-trevor-sym-crypto-sho-proposal).
+[ShoHmacSha256](<https://github.com/signalapp/libsignal/blob/main/rust/poksho/src/shohmacsha256.rs#L24-L28>) provides a concrete implementation of ShoApi. It is so named because it is based on HMAC-SHA-256. In this section we will focus on type definitions and a way of reasoning about ShoHmacSha256. I personally learnt a great deal referring to the conversations in two related threads: [Stateful Hash Object Proposal](<https://moderncrypto.org/mail-archive/noise/2018/001872.html>) and [Symmetric Crypto overhaul and stateful hashing](<https://moderncrypto.org/mail-archive/noise/2018/001862.html>).
 
 <a id="xref-shohamcsha256-struct"></a>
 ```rust
@@ -171,7 +171,7 @@ Observe also that the first example absorbs multiple inputs before ratcheting, w
 
 <a id="shohmacsha256-listing-6"></a>
 
-## ShoHmacSha256 - Part 1 {#shohmacsha256-listing-6}
+## SHO - Part 1 {#shohmacsha256-listing-6}
 
 Let's get a little closer to the definitions of three key functions. For details [see here](<https://github.com/signalapp/libsignal/blob/main/rust/poksho/src/shohmacsha256.rs#L31-L62>):
 
@@ -227,6 +227,11 @@ $$
 r &: \{0, 1\}^{256} & \text{256 bit pseudorandom value} \\
 k &: \{0, 1\}^{256} & \text{256 bit key} \\
 m &: \{0, 1\}^{*}  & \text{message of arbitrary length} \\
+\end{array}
+$$
+
+$$
+\begin{array}{rll}
 \langle H_{k}^{m}, \ r \rangle &: ({\normalsize{\text{HMAC-SHA-256}}_{\{0,1\}^{256}}^{\{0,1\}^*}}, \, \{0, 1\}^{256}) & \textit{hasher} \ \text{and} \ \textit{cv}\\
 \end{array}
 $$
@@ -249,7 +254,7 @@ indicating that the *hasher* is keyed with $k$, and has been updated with an arb
 
 It helps to remember that in ABSORBING state, SHO's $r$ is used to key *hasher*, and *hasher* is updated with an arbitrary length input.
 
-### Describing ShoHmacSha256 Implementation
+### SHO Functions
 In this section we will use our notation to capture the semantics of three functions shown in Listing 6. In the following, in each step the part which is modified (within a term) is drawn enclosed in a box. We hope this helps in recognizing elements that change as the state machine evolves.
 
 We will start by considering the two cases of *absorb* function. We will then turn our attention to *ratchet* and *new*.
@@ -261,7 +266,7 @@ Recall that SHO in RATCHETED mode has empty input:
 
 <a id="absorb-after-ratchet"></a>
 
-##### Case 1.1. Absorb After Ratchet. {#absorb-after-ratchet}
+##### Case 1.1. Absorb After Ratchet {#absorb-after-ratchet}
 
 $$
 \begin{array}{c|l}
@@ -283,7 +288,7 @@ $$
 
 <a id="update-input-in-absorbing-mode"></a>
 
-##### Case 1.2. Update Input In Absorbing Mode {#update-input-in-absorbing-mode}
+##### Case 1.2. Update While Absorbing {#update-input-in-absorbing-mode}
 
 $$
 \begin{array}{c|l}
@@ -311,7 +316,7 @@ $$
 {\begin{CD}
     @V{\small{rachet}}VV \\
 \end{CD}}\\
-{\small\text{EXTRACT\_RANDOM}} \langle H_{k}^{m}, \ \boxed{\footnotesize\text{HMAC-SHA-256(k, m||0)}} \rangle & \text{lines 27-29}\\
+{\small\text{EXTRACT}} \langle H_{k}^{m}, \ \boxed{\footnotesize\text{HMAC-SHA-256(k, m||0)}} \rangle & \text{lines 27-29}\\
 {\begin{CD}
     @V VV \\
 \end{CD}}\\
@@ -319,22 +324,22 @@ $$
 \end{array}
 $$
 
-#### Description 3 - Handcrafting ShoHmacSha256 Instance
-Let's try to capture meaning of statements lines 3-8 in function *new* of Listing 6 above. This code handcrafts a new instance assigning default values to the state variables. In short, it puts SHO in RATCHETED state with *hasher* in minimal state, and *cv* (randomness value) 0.
+#### ShoHmacSha256 *new*
+Let's try to capture meaning of statements lines 3-8 in function *new* (Listing 6 above). This code handcrafts a new instance assigning default values to the state variables. In short, it puts SHO in RATCHETED state with *hasher* in minimal state, and *cv* (randomness value) 0.
 
 $$
 \begin{array}{l}
-   {\small{\text{RATCHETED}}} \langle H_{k_0}^{[\,]}, \ r_0 \rangle \ \  where \  k_0 = 0^{32} \ and \ r_0  = 0^{32}\\
+   {\small{\text{RATCHETED}}} \langle H_{k_0}^{[\,]}, \ r_0 \rangle \ where \  k_0 = r_0 = 0^{32}\\
 \end{array}
 $$
 
 Where $k_0$ is a string of 32 zeroes, and so is $r_0$.
 
-Immediately after handcrafting the new instance, *new* calls *absorb* and *ratchet* (line 9) taking SHO to a well-defined state. Now that we have seen how these two functions behave, we should be able sequence [Case 1.1. Absorb After Ratchet](#absorb-after-ratchet) and [Ratchet](#shohmacsha256-ratchet). We will do this in the next section.
+Immediately after handcrafting the new instance, *new* calls *absorb* and *ratchet* (line 9) taking SHO to a well-defined state. Now that we have seen how these two functions behave, we should be able sequence [Case 1.1. Absorb After Ratchet](#absorb-after-ratchet) and [ShoHmacSha256 Ratchet](#shohmacsha256-ratchet). We will do this in the next section.
 
 
 ### Creation Semantics of ShoHmacSha256
-We can now define the semantics of ShoHmacSha256 instance creation in terms of states and state modifications. The meaning of function *new* shown in lines 2-11 of Listing 6 is captured in the following description:
+We can now define the semantics of ShoHmacSha256 instance creation in terms of states and state updates. Simple substitution of values into terms representing SHO states yields the following description::
 
 $$
 \begin{array}{c|l}
@@ -354,14 +359,13 @@ $$
 {\begin{CD}
     @V{\small{rachet}}VV \\
 \end{CD}}\\
-{\small\text{EXTRACT\_RANDOM}} \langle H_{k_0}^{l}, \ \boxed{\small\text{HMAC-SHA-256($k_0, \, l||0$)}} \rangle & \text{lines 27-29}\\
+{\small\text{EXTRACT}} \langle H_{k_0}^{l}, \ \boxed{\small\text{HMAC-SHA-256($k_0, \, l||0$)}} \rangle & \text{lines 27-29}\\
 {\begin{CD}
     @V VV \\
 \end{CD}}\\
 {\small\text{RATCHETED}} \langle H_{{k_0}}^{[\,]}, \ r  \rangle & \text{line 30; $hasher$ reset. Final State}\\
 \end{array}
 $$
-
 
 At this stage, it is fairly easy to transform the above description into a short snippet in Rust. We informally claim that the following snippet is behaviorally equivalent to ShoHmacSha256 instance creation code shown in Listing 6:
 
@@ -380,16 +384,15 @@ At this stage, it is fairly easy to transform the above description into a short
 ```
 $$ \text{Listing 7 - ShoHmacSha256 Object Creation in Short} $$
 
+This is what the function *new* (lines 2-11, Listing 6) ultimately computes!
 
-### Some Observations About the Design Choices
+### A Side Note
 Notice in function *new(label)* on line 4 of [Listing 6](#shohmacsha256-listing-6), HMAC's *key* is a 256-bit block of zeroes. This is a common practice in many internet protocols. In TLS 1.3, for instance, while deriving the `Early Secret` for `client_early_traffic_secret` as shown in [RFC 8446, page 93](<https://datatracker.ietf.org/doc/html/rfc8446#section-7.1>), `HKDF-Extract`'s *salt* is a block of zeroes, which becomes HMAC's initial key material in [KHDF-Extract](https://datatracker.ietf.org/doc/html/rfc5869#section-2.2).
 
 It is interesting that the domain separator string *label* is not used in initializing the *hasher*. The design conversations [here](https://moderncrypto.org/mail-archive/noise/2018/001892.html) and [here](https://moderncrypto.org/mail-archive/noise/2018/001894.html) reveal the thought process behind this construction.
 
 
-## ShoHmacSha256 - Part 2 {#shohmacsha256-listing-8}
-
-#### Producing Arbitrary-length Outputs using *squeeze_and_ratchet*
+## SHO - Part 2 {#shohmacsha256-listing-8}
 
 Let us try to read the following listing:
 
@@ -428,23 +431,26 @@ Let us try to read the following listing:
 ```
 $$ \text{Listing 8 - Squeeze Outputs and Ratchet} $$
 
-##### Squeezing the Output
-The first part of this function, specifically lines 6 to 20, represents the *squeeze* step. It resembles the `HKDF-Extract` and the iterative `HKDF-Expand` phase of HKDF with minor differences in their inputs.
+### Squeezing the Output
+The first part of this function (lines 6-20), represents the *squeeze* step. It resembles the `HKDF-Extract` and the iterative `HKDF-Expand` phase of HKDF with minor differences in their inputs.
 
 In line 6 we see that *squeeze_and_ratchet* is defined only if SHO is already RATCHETED. For illustration, let us assume that the SHO has ratcheted $k$ times so far:
 $$
     R_0 \ \text{\textemdash}\text{\textemdash} \ R_1 \ \text{\textemdash}\text{\textemdash} \ R_2 \ \text{\textemdash}\text{\textemdash} \ \dots \ \text{\textemdash}\text{\textemdash} \ R_{k-1} \ \text{\textemdash}\text{\textemdash}\ R_{k}
 $$
 
-This means that all inputs absorbed after ratchet ${R_{k-1}}$ have been hashed, and stored in the state variable *cv*. This is equivalent to `HKDF-Extract` because *cv* in ratchet $R_k$ stores the randomness extracted from the inputs since ${R_{k-1}}$.
+This means that all inputs absorbed after ratchet ${R_{k-1}}$ have been hashed, and stored in the state variable *cv* ($r$). This is equivalent to `HKDF-Extract` because *cv* in ratchet $R_k$ stores the randomness extracted from the inputs since ${R_{k-1}}$.
 
-*output_hasher_prefix* is a fresh HMAC-SHA-256 hasher keyed with the pseudorandom key *cv*. In each iteration, lines 11 to 20 squeeze one block of output and append it to *output*. In the loop, *output_hasher* is simply a clone of *output_hasher_prefix*. The cloning is required because *finalize* consumes *output_hasher*, and so, there's no way to reuse the hasher.
+*output_hasher_prefix* is a fresh HMAC-SHA-256 hasher keyed with the pseudorandom *cv*. In each iteration, lines 11-20 produce one digest block and append it to the buffer *output*. In the loop, *output_hasher* is simply a clone of *output_hasher_prefix*. Rust's borrow checker ensures that *output_hasher* cannot be used after being consumed by *finalize*.
 
-In lines 14 and 15 we see that the newly cloned *output_hasher* works with only two inputs of length 9 bytes in total:
+In lines 14 and 15 we see that the newly cloned *output_hasher* works with only two inputs, 9 bytes in all:
+
 - a 64 bit output-block number
     - starting from zero, each number is 8 bytes in length, stored in big-endian format
+
 - constant 1, serving as a padding byte.
 
+In iteration *i*, variable *digest* stores $i^{th}$ output block (line 16, Listing 8). This is appended to *output* on line 18. If this is the last block, care is taken to copy only required count of bytes. It is easy to see that the number of output blocks and the final output is
 
 $$
 \begin{array}{rll}
@@ -453,9 +459,10 @@ $$
 \end{array}
 $$
 
-When *outlen* is not a multiple of HASH_LEN, some M initial bytes of the last block, $T_{N-1}$, may be copied to *output* where $0$ < M < HASH_LEN.
+When *outlen* is not a multiple of HASH_LEN, some M initial bytes of the last block, $T_{N-1}$, will be copied to *output* where $0$ < M < HASH_LEN.
 
-We list a few examples showing HMAC's inputs and outputs:
+To help see how block numbers in big-endian format are used to compute each output digest block, we show a few samples here:
+
 
 $$
 \begin{array}{rll}
@@ -474,13 +481,18 @@ $$
 
 ##### Ratcheting the State
 Finally, in the ratcheting step (lines 23 to 28), *cv* is updated with a hash computed over 9 bytes representing:
+
 - the length of the output produced in the *squeeze* step
     - this is a 64 bit value (8 bytes in length), stored in the big-endian format
+
 - a padding byte (set to 2)
 
 The SHO then enters RATCHETED mode.
 
-## Terms and Definitions
+The *ratchet* function is not used here because the hasher is updated with custom input in lines 24-25 before extracting randomness in lines 26-27.
+
+
+## Definitions
 
 ------------
 
@@ -491,46 +503,38 @@ polynomial-time computable functions with an index (also called a _seed_) $s$ an
 when $s$ is randomly selected from $S$ and not known to observers, $PRF(s, x)$ is computationally
 indistinguishable from a random function defined on the same domain with output to the same
 range as $PRF(s, x)$."
-([NIST SP 800-108r1-upd1](#xref-nist-sp-800-180r1-prf))
+([NIST SP 800-108r1-upd1](<https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-108r1-upd1.pdf>))
 
 "A family of functions parameterized by a secret key, such that when the key is
 unknown, the output upon evaluating an input (a message) is indistinguishable
 from a random output of the specified length."
-([NIST SP 800-224-ipd](#xref-nist-sp-800-224-ipd-hmac))
+([NIST SP 800-224-ipd](<https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-224.ipd.pdf>))
 
 ------------
 
 ## References
 
-##### Symmetric-crypto overhaul and stateful hashing {#xref-trevor-sym-crypto-sho-proposal}
-
-<a id="xref-trevor-sym-crypto-sho-proposal"></a>
+Symmetric-crypto overhaul and stateful hashing.
 <https://moderncrypto.org/mail-archive/noise/2018/001862.html>
 
 
-##### Stateful Hash Object Proposal {#xref-trevor-sho-proposal}
-<a id="xref-trevor-sho-proposal"></a>
+Stateful Hash Object Proposal.
 <https://moderncrypto.org/mail-archive/noise/2018/001872.html>
 
 
-<a id="xref-hmac-fips-198-1"></a>
 The Keyed-Hash Message Authentication Code (HMAC). Section 4. HMAC SPECIFICATION.
 <https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.198-1.pdf>
 
 
-##### SHA-3 Standard: Permutation-Based Hash and Extendable-Output Functions. August 2015 {#xref-nist-fips-202-xof}
-<a id="xref-nist-fips-202-xof"></a>
+SHA-3 Standard: Permutation-Based Hash and Extendable-Output Functions. August 2015.
 <https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.202.pdf>
 
 
-<a id="xref-rfc4868-hmac-prf"></a>
 RFC 4868 (section 2.1.2) approves using HMAC-SHA-256 as a PRF.
 <https://datatracker.ietf.org/doc/html/rfc4868>
 
 
-##### Serious Cryptography, Jean-Philippe Aumasson. {#xref-nist-sp-800-224-ipd-hmac}
-<a id="xref-serious-crypto-hmac-prf"></a>
-<a id="xref-nist-sp-800-224-ipd-hmac"></a>
+Serious Cryptography, Jean-Philippe Aumasson.
 Chapter 7 - Keyed Hashing (section on PRF Security).
 
 - "In fact, many of the MACs deployed or standardized are also secure
@@ -538,18 +542,16 @@ PRFs and are often used as either. For example, TLS uses the
 algorithm HMAC-SHA-256 both as a MAC and as a PRF."
 
 
-<a id="xref-nist-sp-800-224-hmac-prf"></a>
 NIST SP 800-224 ipd. Keyed-Hash Message Authentication Code (HMAC). Initial Public Draft. June 2024.
 <https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-224.ipd.pdf>
 
-- "he HMAC tag generation function is
+- "The HMAC tag generation function is
 a pseudorandom function (PRF) and may be used for cryptographic
 purposes other than the classical example of message authentication
 between a sender and a receiver"
 
 
-##### NIST SP 800-108r1-upd1 {#xref-nist-sp-800-180r1-prf}
-<a id="xref-nist-sp-800-180r1-prf"></a>
+NIST SP 800-108r1-upd1.
 Recommendation for Key Derivation Using Pseudorandom Functions.
 Pseudorandom Function (PRF), section 3, page 3. August 2022.
 <https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-108r1-upd1.pdf>
