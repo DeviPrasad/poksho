@@ -11,21 +11,21 @@
 
 **ShoHmacSha256** is a Stateful Hash Object (SHO) that absorbs inputs incrementally, and produces arbitrary-length output when squeezed. Signal protocol defines a simple API for SHO, called ShoApi. This API is designed to mimic the behavior of an *extendable-output function* (XOF). [FIPS 202](#xref-nist-fips-202-xof) defines XOF as *a function on bit strings (also called messages) in which the output can be extended to any desired length*.
 
-FIPS 202 requires XOFs to satisfy the two properties:
+FIPS 202 requires XOFs to satisfy the two properties (*emphasis ours*):
 
-1. (One-way) It is computationally infeasible to find any input that maps to any new pre-specified output.
-2. (Collision-resistant) It is computationally infeasible to find any two distinct inputs that map to the same output.
+1. One-way: It is computationally infeasible to find *any input* that maps to *any new pre-specified* output.
+2. Collision-resistant: It is computationally infeasible to find *any two distinct inputs* that map to *the same output*.
 
 
-HMAC-SHA-256 is a keyed hash function as well as a pseudorandom function (PRF). In addition, it offers immunity against length-extension vulnerabilities of SHA-256. The output of HMAC-SHA-256 is a 256-bit value - a block of 32 bytes.
+HMAC-SHA-256 is a keyed hash function as well as a cryptographically secure pseudorandom function (PRF). The output of HMAC-SHA-256 is a 256-bit value - a block of 32 bytes.
 
-Since a XOF must produce arbitrary-length output, ShoHmacSha256 uses HMAC-SHA-256 as an entropy source to iteratively produce longer outputs. ShoHmacSha256 is used in parts of the protocol that depend on zero-knowledge proofs (zkp) to maintain privacy and secrecy guarantees. SHO is an essential element in the construction of many other protocols in Signal. Our aim here is to understand the design and implementation of this crucial cryptographic construction.
+Because a XOF must produce arbitrary-length output, ShoHmacSha256 relies on HMAC-SHA-256 for entropy when producing an output longer than 256 bits. ShoHmacSha256 is used in parts of Signal protocol that use zero-knowledge proofs (zkp) to ensure privacy and secrecy of the users' identity. Our aim here is to understand the design of this cryptographic construction as well as its implementation.
 
-## ShoApi
-
+## ShoApi {#xref-sho-trait-absorb-and-ratchet}
+<a id="xref-sho-trait-absorb-and-ratchet"></a>
 [ShoApi trait](<https://github.com/signalapp/libsignal/blob/main/rust/poksho/src/shoapi.rs>) is part of `poksho` library of [libsignal project](<https://github.com/signalapp/libsignal>). The project states that `poksho` stands for "proof-of-knowledge, stateful-hash-object", and is a collection of "*utilities for implementing zero-knowledge proofs (such as those used by `zkgroup`)*";
 
-We present a slightly formatted version of ShoApi below. We have added informal comments stating the general behavior of each function.
+We present a slightly edited version of ShoApi below. We have added informal comments stating the general behavior of each function.
 
 ```rust
  1 pub trait ShoApi {
@@ -56,34 +56,74 @@ We present a slightly formatted version of ShoApi below. We have added informal 
 26    // pub fn squeeze(&mut self, _outlen: usize) -> Vec<u8>;
 27 }
 ```
+$$ \text{Listing 1. ShoApi} $$
 
-It is clear from its definition that *ShoApi* is designed to maintain mutable state.
+It is obvious from the signatures of functions that *ShoApi* is designed to maintain mutable state.
 
-<a id="xref-sho-trait-absorb-and-ratchet"></a>
-This trait provides a generic implementation for *absorb_and_ratchet(input)* in terms of the abstract functions *absorb(input)* followed by *ratchet()*.
+This trait provides a default, generic implementation for *absorb_and_ratchet(input)* in terms of the abstract functions *absorb(input)* and *ratchet()*. We will see this function in action shortly.
 
 
-## ShoHmacSha256
+## ShoHmacSha256  {#xref-shohamcsha256-struct}
 
-[ShoHmacSha256](<https://github.com/signalapp/libsignal/blob/main/rust/poksho/src/shohmacsha256.rs#L24-L28>) provides a concrete implementation of ShoApi. It is so named because it is constructed using HMAC-SHA-256. In this section we will focus on the type definitions and the creation semantics of ShoHmacSha256. I learnt a great deal referring to the conversations in two related threads: [Stateful Hash Object Proposal](#xref-trevor-sho-proposal) and [Symmetric Crypto overhaul and stateful hashing](#xref-trevor-sym-crypto-sho-proposal).
+[ShoHmacSha256](<https://github.com/signalapp/libsignal/blob/main/rust/poksho/src/shohmacsha256.rs#L24-L28>) provides a concrete implementation of ShoApi. It is so named because it is based on HMAC-SHA-256. In this section we will focus on type definitions and a way of reasoning about ShoHmacSha256. I personally learnt a great deal referring to the conversations in two related threads: [Stateful Hash Object Proposal](#xref-trevor-sho-proposal) and [Symmetric Crypto overhaul and stateful hashing](#xref-trevor-sym-crypto-sho-proposal).
 
-Let's take a first look at the types:
-
+<a id="xref-shohamcsha256-struct"></a>
 ```rust
  1 pub struct ShoHmacSha256 {
- 2     hasher: Hmac<Sha256>,
- 3     cv: [u8; HASH_LEN],
- 4     mode: Mode,
+ 2    hasher: Hmac<Sha256>,
+ 3    cv: [u8; HASH_LEN],
+ 4    mode: Mode,
  5 }
 
  1 enum Mode {
- 2     ABSORBING,
- 3     RATCHETED,
+ 2    ABSORBING,
+ 3    RATCHETED,
  4 }
 ```
-HASH_LEN is constant 32, defined elsewhere, representing the block length (in bytes) of SHA-256.
+$$ \text{Listing 2. ShoHmacSha256 Type Definition} $$
 
-This construction is based on HMAC-SHA-256 keyed-hashing function. It is useful to recall that HMAC-SHA-256 is a pseudorandom function. As we will see later, SHO operates in two *modes*s: ABSORBING and RATCHETED. While ABSORBING, **hasher** simply ingests its inputs. When SHO is ratcheted, the **chaining variable** *cv* captures *hasher*'s pseudorandom output. We will see more about ratcheting in later sections.
+HASH_LEN is constant 32, representing the block length of SHA-25.
+
+This construction is based on HMAC-SHA-256, a keyed-hashing function. Notice ShoHmacSha256 operates in two *modes*s: **ABSORBING** and **RATCHETED**. We will see in later sections that while ABSORBING, **hasher** simply ingests its inputs, and when RATCHETED, the **chaining variable** *cv* captures *hasher*'s (pseudorandom) output.
+
+It is useful to recall that HMAC-SHA-256 *hasher* is a PRF.
+
+Since there are only two modes of operation, we will denote RATCHETED and ABSORBING states using two simple terms:
+
+$$
+\begin{array}{l}
+    {\small{\text{RATCHETED}}} \langle H_{k}^{[\,]}, \ r \rangle \\
+    \\
+    {\small{\text{ABSORBING}}} \langle H_{k}^{m}, \ r \rangle \\
+\end{array}
+$$
+
+where the two crucial state variables appear inside matching angle brackets $\langle \, \rangle$.
+
+ShoHmacSha256 state consists of two components:
+
+- a HMAC-SHA-256 instance, *hasher*, represented by the letter $H$, and
+- the randomness extracted so far, *cv*, represented by lower case letters $r$ and $k$.
+
+In general, $H_k^{m}$ represents a *hasher* keyed with $k$, updated with an arbitrary length message $m$.
+
+If we know $|m| = 0$ (that is, the length of $m$ is zero), we write $H_k^{[\,]}$.
+
+We assume HMAC-SHA-256 exposes a streaming interface, meaning we can *update* $H$ incrementally so the
+inputs are appended to an internal buffer. Note that the two sets of streaming commands
+$$
+    H_k^{[\,]}.update(``a").update(``bc").update(``xyz")\\
+$$
+and
+$$
+    H_k^{[\,]}.update(``ab").update(``cx").update(``y").update(``z")\\
+$$
+yield the same result
+$$
+    H_k^{``abcxyz"}
+$$
+
+This is all the machinery we need to describe the complete behavior of ShoHmacSha256!
 
 ## SHO use cases in *libsignal*
 
@@ -100,6 +140,7 @@ Our first snippet is from [poksho](<https://github.com/signalapp/libsignal/blob/
  6 }
  7 sho.ratchet();
 ```
+$$ \text{Listing 3. ShoHmacSha256 - Example 1} $$
 
 The `point` variable in the above code represents a 256-bit value.
 
@@ -110,6 +151,7 @@ The second example is from [zkcredential](<https://github.com/signalapp/libsigna
  2     ShoHmacSha256::new(b"Signal_ZKCredential_CredentialPrivateKey_generate_20230410");
  3 sho.absorb_and_ratchet(&randomness);
 ```
+$$ \text{Listing 4. ShoHmacSha256 - Example 2} $$
 
 The `randomness` argument in this snippet is an array of 32 bytes (a 256-bit value).
 
@@ -121,12 +163,15 @@ The last sample is from [backup auth credential](<https://github.com/signalapp/l
  3 sho.absorb_and_ratchet(uuid::Uuid::from(aci).as_bytes());
  4 sho.absorb_and_ratchet(&backup_key.0);
 ```
+$$ \text{Listing 5. ShoHmacSha256 - Example 3} $$
 
-Take note of the domain separator strings, on line 2 of all three snippets. The second and third use cases make an effort to choose distinct prefixes, highlighting different contexts of the application.
+Take note of the domain separator strings, on line 2 of all three snippets. The second and third use cases  (Listing 4 and 5, respectively) make an effort to choose distinct prefixes, emphasizing the need to distinguish different contexts of the application.
 
 Observe also that the first example absorbs multiple inputs before ratcheting, while the second example absorbs and ratchets in one logical step. The third example shows *absorb_and_ratchet()* used in succession.
 
-## ShoHmacSha256 - Part 1
+<a id="shohmacsha256-listing-6"></a>
+
+## ShoHmacSha256 - Part 1 {#shohmacsha256-listing-6}
 
 Let's get a little closer to the definitions of three key functions. For details [see here](<https://github.com/signalapp/libsignal/blob/main/rust/poksho/src/shohmacsha256.rs#L31-L62>):
 
@@ -164,114 +209,185 @@ Let's get a little closer to the definitions of three key functions. For details
 31        self.mode = Mode::RATCHETED;
 32    }
 33 }
-
 ```
+$$ \text{Listing 6. ShoHmacSha256 -} \textit{new, absorb, and ratchet} $$
+
+The functions are deceptively simple. The creation of a new instance is defined in terms of *absorb* and *ratchet*. These functions behave differently depending upon the current state of SHO. It is very clear this code is carefully balancing a few invariants, preconditions and post-conditions over the state variables *mode*, *hasher* and *cv*.
+
+To understand this better, and also to avoid re-narrating the source code, we introduce a simple notation to describe how the action unfolds linearly. This notation succinctly captures the state of a SHO making it easier to reason about its mutation over time.
+
+### Typing ShoHmacSha256
+
+We will informally define a few constructs to describe the state machine. The notation is simple and direct. The idea is to ensure that the state of a SHO is always well-typed.
+
+SHO state is well-typed.
+
+$$
+\begin{array}{rll}
+r &: \{0, 1\}^{256} & \text{256 bit pseudorandom value} \\
+k &: \{0, 1\}^{256} & \text{256 bit key} \\
+m &: \{0, 1\}^{*}  & \text{message of arbitrary length} \\
+\langle H_{k}^{m}, \ r \rangle &: ({\normalsize{\text{HMAC-SHA-256}}_{\{0,1\}^{256}}^{\{0,1\}^*}}, \, \{0, 1\}^{256}) & \textit{hasher} \ \text{and} \ \textit{cv}\\
+\end{array}
+$$
+
+These are equivalent to the type definition of ShoHmacSha256 in *libsignal*. We have already seen the Rust definition in an earlier [section](#xref-shohamcsha256-struct).
+
+A SHO in RATCHETED state is denoted by the term
+
+$$ {\small{\text{RATCHETED}}} \langle H_{k}^{[\,]}, \ r \rangle\\ $$
+
+indicating that the *hasher* is keyed with $k$ and its input is empty. The SHO is said to be in *minimal* state for this reason.
+
+It helps to remember that in RATCHETED state, *hasher*'s input is empty.
+
+A SHO in ABSORBING state is denoted by writing
+
+$$ {\small{\text{ABSORBING}}} \langle H_{k}^{m}, \ k \rangle\\ $$
+
+indicating that the *hasher* is keyed with $k$, and has been updated with an arbitrary length input $m$ (for *message*). In the ABSORBING mode, *hasher*'s key is same as SHO's pseudorandom state (usually represented by $r$). While ABSORBING, $k$ is the extracted randomness that is also used to key HMAC-SHA-256.
+
+It helps to remember that in ABSORBING state, SHO's $r$ is used to key *hasher*, and *hasher* is updated with an arbitrary length input.
+
+### Describing ShoHmacSha256 Implementation
+In this section we will use our notation to capture the semantics of three functions shown in Listing 6. In the following, in each step the part which is modified (within a term) is drawn enclosed in a box. We hope this helps in recognizing elements that change as the state machine evolves.
+
+We will start by considering the two cases of *absorb* function. We will then turn our attention to *ratchet* and *new*.
+
+#### ShoHmacSha256 *absorb* {#shohmacsha256-absorb}
+Notice that *absorb* has a branching behavior depending on the current state of SHO. Let's first describe the case which we will call *Absorb After Ratchet*. We will then see *Update While Absorbing* case.
+
+Recall that SHO in RATCHETED mode has empty input:
+
+<a id="absorb-after-ratchet"></a>
+
+##### Case 1.1. Absorb After Ratchet. {#absorb-after-ratchet}
+
+$$
+\begin{array}{c|l}
+{\small{\text{RATCHETED}}} \langle H_{k}^{[\,]}, \ r \rangle & \text{lines 13-19}\\
+{\begin{CD}
+    @V{\small{absorb(l)}}VV \\
+\end{CD}}\\
+{\small\text{PRF\_UPDATE}} \langle H_{\boxed{{r}}}^{[\,]}, \ r \rangle & \text{lines 14-18}\\
+{\begin{CD}
+    @V{\small{(l)}}VV \\
+\end{CD}}\\
+{\small\text{ABSORB}} \langle H_{\small{r}}^{\boxed{l}}, \ r  \rangle & \text{line 19}\\
+{\begin{CD}
+    @V VV \\
+\end{CD}}\\
+{\small\text{ABSORBING}} \langle H_{{r}}^{l}, \ r  \rangle & \text{Final State}\\
+\end{array}
+$$
+
+<a id="update-input-in-absorbing-mode"></a>
+
+##### Case 1.2. Update Input In Absorbing Mode {#update-input-in-absorbing-mode}
+
+$$
+\begin{array}{c|l}
+{\small{\text{ABSORBING}}} \langle H_{k}^{m}, \ k \rangle & \text{lines 13-19}\\
+{\begin{CD}
+    @V{\small{absorb(l)}}VV \\
+\end{CD}}\\
+{\small\text{UPDATE}} \langle H_{k}^{\boxed{\footnotesize\text{m||l}}}, k \rangle & \text{line 19}\\\
+{\begin{CD}
+    @V VV \\
+\end{CD}}\\
+{\small\text{ABSORBING}} \langle H_{{k}}^{m'}, \ k  \rangle & \text{Final State}\\
+\end{array}
+$$
+
+
+<a id="shohmacsha256-ratchet"></a>
+
+#### ShoHmacSha256 *ratchet* {#shohmacsha256-ratchet}
+Recall when SHO is ratcheted, the randomness component $r$ is produced by hashing the preceding inputs to the *hasher*. And then, *hasher*' is reset meaning its input is cleared.
+
+$$
+\begin{array}{c|l}
+{\small{\text{ABSORBING}}} \langle H_{k}^{m}, \ k \rangle\\
+{\begin{CD}
+    @V{\small{rachet}}VV \\
+\end{CD}}\\
+{\small\text{EXTRACT\_RANDOM}} \langle H_{k}^{m}, \ \boxed{\footnotesize\text{HMAC-SHA-256(k, m||0)}} \rangle & \text{lines 27-29}\\
+{\begin{CD}
+    @V VV \\
+\end{CD}}\\
+{\small\text{RATCHETED}} \langle H_{{k}}^{[\,]}, \ r  \rangle & \text{line 30; $hasher$ reset. Final State}\\
+\end{array}
+$$
+
+#### Description 3 - Handcrafting ShoHmacSha256 Instance
+Let's try to capture meaning of statements lines 3-8 in function *new* of Listing 6 above. This code handcrafts a new instance assigning default values to the state variables. In short, it puts SHO in RATCHETED state with *hasher* in minimal state, and *cv* (randomness value) 0.
+
+$$
+\begin{array}{l}
+   {\small{\text{RATCHETED}}} \langle H_{k_0}^{[\,]}, \ r_0 \rangle \ \  where \  k_0 = 0^{32} \ and \ r_0  = 0^{32}\\
+\end{array}
+$$
+
+Where $k_0$ is a string of 32 zeroes, and so is $r_0$.
+
+Immediately after handcrafting the new instance, *new* calls *absorb* and *ratchet* (line 9) taking SHO to a well-defined state. Now that we have seen how these two functions behave, we should be able sequence [Case 1.1. Absorb After Ratchet](#absorb-after-ratchet) and [Ratchet](#shohmacsha256-ratchet). We will do this in the next section.
+
 
 ### Creation Semantics of ShoHmacSha256
-The first thing to notice in function *new(label)* is that the HMAC's *key* is a block of zeroes. The *key* length is 32 bytes, which is the block length of SHA-256. This perfectly fits with [HMAC requirements](#xref-hmac-fips-198-1).
+We can now define the semantics of ShoHmacSha256 instance creation in terms of states and state modifications. The meaning of function *new* shown in lines 2-11 of Listing 6 is captured in the following description:
 
-The domain separator *label* is not used in initializing the *hasher*. In my first reading, this came as a surprise because I was expecting the *label* value to be a seed to HMAC. Then I stumbled upon [answer 1](https://moderncrypto.org/mail-archive/noise/2018/001892.html) and [answer 2](https://moderncrypto.org/mail-archive/noise/2018/001894.html) which helped me see the thought process behind this construction.
-
-It is not uncommon to use zeroes as HMAC key. In TLS 1.3, HMAC is keyed with a string of zeroes during the key derivation process (aka key schedule). While deriving the `Early Secret` for `client_early_traffic_secret` or `binder_key` in [RFC 8446](https://datatracker.ietf.org/doc/html/rfc8446#section-7.1)(section 7.1, page 93), the HKDF-Extract step explicitly receives a block of zeroes as *salt*. This value, in turn, is passed as HMAC's initial key material within [KHDF-Extract](https://datatracker.ietf.org/doc/html/rfc5869#section-2.2).
-
-
-The SHO instance (named *sho*) starts off in the RATCHETED mode setting *cv* to a block of zeroes. Again, it is not surprising to see the length of *cv* matches the block length of SHA-256(32 bytes).
-
-Immediately after crafting *sho*, construction proceeds to *absorb_and_ratchet* with passing *label* argument (the domain separator value). As we have already [seen](#xref-sho-trait-absorb-and-ratchet) in the ShoApi trait, this essentially absorbs the customization label and ratchets. Our immediate interest, therefore, is to understand the internals of these two functions.
-
-
-#### Completing ShoHmacSha256 Construction with *absorb_and_ratchet*
-A closer inspection of the call chain `new(label) --> absorb_and_ratchet(label)` reveals that the three functions can be readily inlined with simple renaming of function arguments. The result of such a source transformation is the following inlined function:
-
-```rust
- 1 fn _rewrite_inline_ShoHmacSha256_new_absorb_ratchet_(label: &[u8]) {
- 2   // new
- 3   let mut sho = ShoHmacSha256 {
- 4     hasher: Hmac::<Sha256>::new_from_slice(&[0; HASH_LEN])
- 5                               .expect("HMAC accepts 256-bit keys"),
- 6     cv: [0; HASH_LEN],
- 7     mode: Mode::RATCHETED,
- 8   };
- 9
-10   // sho.absorb_and_ratchet(label);
-11   {
-12     // absorb(label)
-13     // rename "self" as "sho", and "input" as "label"
-14     if let Mode::RATCHETED = sho.mode {
-15       sho.hasher = Hmac::<Sha256>::new_from_slice(&sho.cv)
-16                .expect("HMAC accepts 256-bit keys");
-17       sho.mode = Mode::ABSORBING;
-18     }
-19     sho.hasher.update(label);
-20
-21     // ratchet()
-22     // rename "self" as "sho".
-23     if let Mode::RATCHETED = sho.mode {
-24       return sho; // code rewrite: return "sho"
-25     }
-26     sho.hasher.update(&[0x00]);
-27     sho.cv.copy_from_slice(
-28                 &self.hasher.clone().finalize().into_bytes());
-29     sho.hasher.reset();
-30     sho.mode = Mode::RATCHETED;
-31   }
-32
-33   sho
-34 }
-```
-
-Note that *absorb_and_ratchet()* executes *absorb* when *sho* mode is RATCHETED.
-
-The effect of *absorb(label)* on *sho* is the following:
-
-1. *hasher* is replaced by a fresh HMAC-SHA-256 instance primed with the value *cv*.
-    - at this point in execution, *cv* is simply a byte array of 32 zeroes.
-2. the new *hasher* absorbs the domain separator *label*.
-3. *mode* becomes ABSORBING.
-
-In other words, when creating a new instance of SHO
-
-1. *hasher*'s key is a 256 bit block of zeroes
-    - it matches the block size of SHA-256.
-    - this initializes *hasher* with a well-defined (predictable) state
-2. the domain separator is absorbed.
-    - the customization label becomes a prefix to context-related inputs absorbed later.
-3. *sho* is prepared to absorb more inputs
+$$
+\begin{array}{c|l}
+{\small{\text{RATCHETED}}} \langle H_{k_0}^{[\,]}, \ r_0 \rangle & \text{lines 13-19}\\
+{\begin{CD}
+    @V{\small{absorb(l)}}VV \\
+\end{CD}}\\
+{\small\text{PRF\_UPDATE}} \langle H_{\boxed{{r_0}}}^{[\,]}, \ r_0 \rangle & \text{lines 14-18}\\
+{\begin{CD}
+    @V{\small{(l)}}VV \\
+\end{CD}}\\
+{\small\text{ABSORB}} \langle H_{\small{r_0}}^{\boxed{l}}, \ r_0  \rangle & \text{line 19}\\
+{\begin{CD}
+    @V VV \\
+\end{CD}}\\
+{\small\text{ABSORBING}} \langle H_{{r_0}}^{l}, \ r_0  \rangle & \text{post-absorb, before calling $ratchet$}\\
+{\begin{CD}
+    @V{\small{rachet}}VV \\
+\end{CD}}\\
+{\small\text{EXTRACT\_RANDOM}} \langle H_{k_0}^{l}, \ \boxed{\small\text{HMAC-SHA-256($k_0, \, l||0$)}} \rangle & \text{lines 27-29}\\
+{\begin{CD}
+    @V VV \\
+\end{CD}}\\
+{\small\text{RATCHETED}} \langle H_{{k_0}}^{[\,]}, \ r  \rangle & \text{line 30; $hasher$ reset. Final State}\\
+\end{array}
+$$
 
 
-Following *absorb*, in lines 26-28 actually carry out the crux of *ratchet()*
-
-1. *hasher*'s input is zero-padded
-2. *hasher* is finalized, and the pseudorandom output is extracted
-    - recall that HMAC-SHA-256 is a PRF
-3. *cv* is initialized with the fresh pseudorandom output from *hasher*
-
-Now that *sho* has ratcheted and collected a one-way hash of the current state of *sho*, it reduces *hasher*'s state to a minimum in lines 29-30.
-
-1. *hasher*'s internal state is reset
-    - *hasher*'s key is reset to what it was prior to *finalize()* on line 28.
-    - *hasher*s inputs are cleared.
-2. *sho* enters RATCHETED mode
-    - *cv* represents a one-way hash of the past inputs
-    - *hasher* state is reset.
-    - *hasher* is ready to accept fresh inputs.
-
-In short, ShoHmacSha253 instance creation is operationally equivalent to the following code:
+At this stage, it is fairly easy to transform the above description into a short snippet in Rust. We informally claim that the following snippet is behaviorally equivalent to ShoHmacSha256 instance creation code shown in Listing 6:
 
 ```rust
- 1    let hs256 = Hmac::<Sha256>::new_from_slice(&[0; HASH_LEN])
- 2        .expect("HMAC accepts 256-bit keys");
- 3    hs256.update(label); // absorb
- 4    hs256.update(&[0x00]); // pad
+ 1  let hs256 = Hmac::<Sha256>::new_from_slice(&[0; HASH_LEN])
+ 2      .expect("HMAC accepts 256-bit keys");
+ 3  hs256.update(label); // absorb
+ 4  hs256.update(&[0x00]); // pad
  5
- 8    let sho = {
- 9        hasher: Hmac::<Sha256>::new_from_slice(&[0; HASH_LEN])
+ 8  let sho = {
+ 9      hasher: Hmac::<Sha256>::new_from_slice(&[0; HASH_LEN])
 10            .expect("HMAC accepts 256-bit keys"),
-11        cv: hs256.finalize().into_bytes().into(),
-12        mode: Mode::RATCHETED,
-13    };
+11      cv: hs256.finalize().into_bytes().into(),
+12      mode: Mode::RATCHETED,
+13  };
 ```
+$$ \text{Listing 7 - ShoHmacSha256 Object Creation in Short} $$
 
+
+### Some Observations About the Design Choices
+Notice in function *new(label)* on line 4 of [Listing 6](#shohmacsha256-listing-6), HMAC's *key* is a 256-bit block of zeroes. This is a common practice in many internet protocols. In TLS 1.3, for instance, while deriving the `Early Secret` for `client_early_traffic_secret` as shown in [RFC 8446, page 93](<https://datatracker.ietf.org/doc/html/rfc8446#section-7.1>), `HKDF-Extract`'s *salt* is a block of zeroes, which becomes HMAC's initial key material in [KHDF-Extract](https://datatracker.ietf.org/doc/html/rfc5869#section-2.2).
+
+It is interesting that the domain separator string *label* is not used in initializing the *hasher*. The design conversations [here](https://moderncrypto.org/mail-archive/noise/2018/001892.html) and [here](https://moderncrypto.org/mail-archive/noise/2018/001894.html) reveal the thought process behind this construction.
+
+
+## ShoHmacSha256 - Part 2 {#shohmacsha256-listing-8}
 
 #### Producing Arbitrary-length Outputs using *squeeze_and_ratchet*
 
@@ -310,6 +426,7 @@ Let us try to read the following listing:
 30    }
 31 }
 ```
+$$ \text{Listing 8 - Squeeze Outputs and Ratchet} $$
 
 ##### Squeezing the Output
 The first part of this function, specifically lines 6 to 20, represents the *squeeze* step. It resembles the `HKDF-Extract` and the iterative `HKDF-Expand` phase of HKDF with minor differences in their inputs.
@@ -385,13 +502,14 @@ from a random output of the specified length."
 
 ## References
 
+##### Symmetric-crypto overhaul and stateful hashing {#xref-trevor-sym-crypto-sho-proposal}
+
 <a id="xref-trevor-sym-crypto-sho-proposal"></a>
-Symmetric-crypto overhaul and stateful hashing.
 <https://moderncrypto.org/mail-archive/noise/2018/001862.html>
 
 
+##### Stateful Hash Object Proposal {#xref-trevor-sho-proposal}
 <a id="xref-trevor-sho-proposal"></a>
-Stateful Hash Object Proposal
 <https://moderncrypto.org/mail-archive/noise/2018/001872.html>
 
 
@@ -400,8 +518,8 @@ The Keyed-Hash Message Authentication Code (HMAC). Section 4. HMAC SPECIFICATION
 <https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.198-1.pdf>
 
 
+##### SHA-3 Standard: Permutation-Based Hash and Extendable-Output Functions. August 2015 {#xref-nist-fips-202-xof}
 <a id="xref-nist-fips-202-xof"></a>
-SHA-3 Standard: Permutation-Based Hash and Extendable-Output Functions. August 2015.
 <https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.202.pdf>
 
 
@@ -410,9 +528,10 @@ RFC 4868 (section 2.1.2) approves using HMAC-SHA-256 as a PRF.
 <https://datatracker.ietf.org/doc/html/rfc4868>
 
 
+##### Serious Cryptography, Jean-Philippe Aumasson. {#xref-nist-sp-800-224-ipd-hmac}
 <a id="xref-serious-crypto-hmac-prf"></a>
 <a id="xref-nist-sp-800-224-ipd-hmac"></a>
-Serious Cryptography, Jean-Philippe Aumasson. Chapter 7 - Keyed Hashing (section on PRF Security).
+Chapter 7 - Keyed Hashing (section on PRF Security).
 
 - "In fact, many of the MACs deployed or standardized are also secure
 PRFs and are often used as either. For example, TLS uses the
@@ -429,7 +548,8 @@ purposes other than the classical example of message authentication
 between a sender and a receiver"
 
 
+##### NIST SP 800-108r1-upd1 {#xref-nist-sp-800-180r1-prf}
 <a id="xref-nist-sp-800-180r1-prf"></a>
-NIST SP 800-108r1-upd1. Recommendation for Key Derivation Using Pseudorandom Functions.
+Recommendation for Key Derivation Using Pseudorandom Functions.
 Pseudorandom Function (PRF), section 3, page 3. August 2022.
 <https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-108r1-upd1.pdf>
